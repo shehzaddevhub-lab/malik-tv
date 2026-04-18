@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="ur" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MALIK TV - Live Streaming</title>
+    <link rel="manifest" href="data:application/manifest+json;base64,eyJuYW1lIjoiTUFMSUsgVFYiLCJzaG9ydF9uYW1lIjoiTUFMSUsgVFYiLCJzdGFydF91cmwiOiIuLyIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDAwMDAiLCJ0aGVtZV9jb2xvciI6IiNmZjAwMDAifQ==">
+    
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        :root {
+            --primary-red: #ff0000;
+            --dark-red: #8b0000;
+            --gold: #ffff00;
+            --white: #ffffff;
+            --glass-bg: rgba(0, 0, 0, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --footer-gray: rgba(200, 200, 200, 0.7);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Segoe UI", sans-serif; }
+
+        html, body {
+            height: 100%; width: 100%; margin: 0; padding: 0;
+        }
+
+        /* --- MAIN LAYOUT (FLEXBOX) --- */
+        body { 
+            background: radial-gradient(circle at center, var(--primary-red) 0%, var(--dark-red) 100%);
+            color: var(--white); 
+            display: flex; 
+            flex-direction: row; /* PC/TV: Side by side */
+            overflow: hidden;
+        }
+
+        .unselectable { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+        /* --- PLAYER SECTION --- */
+        #player-wrapper {
+            flex: 2; /* Takes 2/3 space on large screens */
+            background: #000; position: relative; z-index: 1000;
+            display: flex; flex-direction: column; 
+            border-right: 2px solid var(--gold);
+            border-bottom: none;
+        }
+
+        .now-playing { 
+            padding: 8px; font-size: 13px; font-weight: bold; color: var(--gold); 
+            text-align: left; padding-left: 15px; background: rgba(0,0,0,0.8); letter-spacing: 1px;
+            position: absolute; top: 0; left: 0; right: 50px; z-index: 10;
+            border-bottom-right-radius: 15px;
+        }
+
+        /* --- INSTALL BUTTONS (TOP RIGHT) --- */
+        .install-buttons {
+            position: absolute; top: 8px; right: 55px; z-index: 15;
+            display: flex; gap: 8px;
+        }
+        
+        .header-btn {
+            background: var(--gold); color: #000; border: 1px solid #fff;
+            padding: 4px 10px; border-radius: 6px; cursor: pointer; outline: none;
+            font-weight: bold; font-size: 12px; transition: 0.3s;
+            text-decoration: none; display: flex; align-items: center; justify-content: center;
+        }
+        .header-btn:hover { background: #fff; color: var(--dark-red); }
+        
+        #installWebBtn { display: none; /* Hidden until PWA is ready */ }
+
+        /* --- SMART PiP BUTTON --- */
+        .pip-btn {
+            position: absolute; top: 8px; right: 15px; z-index: 15;
+            background: rgba(0,0,0,0.6); color: var(--white); border: 1px solid var(--gold);
+            padding: 4px 8px; border-radius: 6px; cursor: pointer; outline: none;
+            display: none; 
+            transition: 0.3s; align-items: center; justify-content: center;
+        }
+        .pip-btn:active, .pip-btn:focus { background: var(--gold); color: #000; }
+        .pip-btn svg { width: 18px; height: 18px; fill: currentColor; }
+
+        .video-container {
+            width: 100%; height: 100%; background: #000; position: relative;
+            display: flex; align-items: center; justify-content: center;
+        }
+        
+        /* Disable Native Controls Pointer Events */
+        video { width: 100%; height: 100%; object-fit: contain; transition: 0.2s; pointer-events: none; }
+        .video-fill { object-fit: fill !important; }
+
+        .click-shield-main { position: absolute; top: 0; bottom: 0; left: 0; right: 50px; z-index: 5; }
+        .click-shield-bottom { position: absolute; top: 50px; bottom: 0; right: 0; width: 50px; z-index: 5; }
+
+        /* NATIVE CONTROLS HIDE */
+        video::-webkit-media-controls { display: none !important; }
+
+        .player-loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 45px; height: 45px; border: 4px solid rgba(255, 255, 255, 0.2);
+            border-top: 4px solid var(--gold); border-radius: 50%;
+            animation: spin 1s linear infinite; z-index: 20; display: none;
+        }
+        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+        .overlay-ui { opacity: 0; visibility: hidden; transition: opacity 0.3s ease, visibility 0.3s ease; }
+        #player-wrapper.active-controls .overlay-ui, #player-wrapper:hover .overlay-ui { opacity: 1; visibility: visible; }
+
+        /* --- CUSTOM TOOLS BAR --- */
+        .tools-bar {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+            padding: 10px 5px; background: rgba(0,0,0,0.85); border-top: 1px solid rgba(255, 215, 0, 0.5);
+            z-index: 100;
+        }
+
+        .tools-left { display: flex; gap: 6px; align-items: center; justify-self: start; }
+        .tools-center { display: flex; align-items: center; justify-self: center; }
+        .tools-right { display: flex; gap: 6px; align-items: center; justify-self: end; }
+
+        /* FIX: White text on Gold background issue resolved */
+        .btn, .quality-select {
+            background: rgba(255,255,255,0.15); color: var(--white); border: 1px solid var(--gold);
+            padding: 8px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: bold; outline: none;
+            display: flex; align-items: center; justify-content: center; white-space: nowrap; pointer-events: auto;
+        }
+        .btn:active, .btn:focus, .quality-select:focus { 
+            background: var(--gold); 
+            color: #000 !important; /* Force text to black when background is gold */
+        }
+        .play-btn { font-size: 16px; padding: 8px 24px; }
+
+        .toast-msg {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(220, 0, 0, 0.95); color: white; padding: 20px; border-radius: 12px;
+            font-size: 15px; font-weight: bold; border: 2px solid var(--gold); z-index: 999999;
+            opacity: 0; visibility: hidden; text-align: center; width: 85%; max-width: 350px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); pointer-events: none;
+        }
+        .toast-msg.show { 
+            opacity: 1; visibility: visible; 
+            animation: blinkPopup 0.8s infinite alternate; 
+        }
+        @keyframes blinkPopup {
+            0% { box-shadow: 0 0 10px var(--gold); transform: translate(-50%, -50%) scale(1); }
+            100% { box-shadow: 0 0 30px var(--gold); transform: translate(-50%, -50%) scale(1.05); color: var(--gold); }
+        }
+
+        /* --- CHANNELS SECTION --- */
+        #channels-wrapper { 
+            flex: 1; /* Takes 1/3 space on large screens */
+            overflow-y: auto; display: flex; flex-direction: column; position: relative; 
+            background: rgba(0,0,0,0.2); min-width: 320px;
+        }
+        
+        .list-container { padding: 15px; }
+
+        /* --- BRANDING HEADER (NEW) --- */
+        .brand-header {
+            text-align: center; margin-bottom: 10px;
+        }
+        .brand-title {
+            font-size: 28px; font-weight: 900; margin: 0; color: var(--white);
+            text-shadow: 2px 2px 4px var(--dark-red), 0 0 10px var(--gold);
+            letter-spacing: 2px;
+        }
+        .brand-subtitle {
+            font-size: 12px; font-style: italic; color: var(--gold); margin: 5px 0 0 0;
+            font-weight: 600; opacity: 0.9;
+        }
+
+        /* --- MARQUEE --- */
+        .marquee-code {
+            width: 100%; background-color: yellow; font-family: Arial; font-size: 15.5px;
+            margin-bottom: 10px; padding-top: 0.5px; padding-bottom: 0.5px; color: #CC0000; 
+            font-weight: bold; border: 6px double red;
+            -webkit-user-select: none !important; user-select: none !important; pointer-events: none;
+        }
+
+        .search-box { padding-bottom: 10px; width: 100%; flex-shrink: 0; position: sticky; top: 0; z-index: 10; background: var(--dark-red); padding-top: 10px; }
+        .search-input {
+            width: 100%; padding: 8px 12px; height: 40px; border-radius: 15px; border: 1px solid rgba(255, 215, 0, 0.5);
+            background: rgba(0,0,0,0.4); color: var(--white); outline: none; 
+            font-size: 13px !important; font-weight: bold; transition: 0.3s; 
+            -webkit-user-modify: read-write-plaintext-only; touch-action: manipulation;
+        }
+        .search-input:focus { border-color: var(--gold); background: rgba(0,0,0,0.7); box-shadow: 0 0 8px rgba(255,215,0,0.4); }
+        .search-input::placeholder { color: rgba(255, 255, 255, 0.6); font-size: 12px; }
+
+        .category-title { font-size: 18px; color: var(--gold); margin: 10px 0; padding-left: 10px; border-left: 4px solid var(--gold); font-weight: bold; }
+        
+        /* Auto-adjust grid for wider sidebars */
+        .channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 10px; margin-bottom: 10px; }
+
+        .channel-card { 
+            background: var(--glass-bg); border: 1px solid rgba(255, 215, 0, 0.3); 
+            border-radius: 12px; padding: 15px 5px; text-align: center; cursor: pointer; transition: 0.3s; 
+            outline: none; /* Important for TV Focus */
+        }
+        
+        /* TV Remotes / PC Keyboard Navigation Focus */
+        .channel-card:focus, .channel-card:hover {
+            border-color: #fff; transform: scale(1.05); background: rgba(255, 215, 0, 0.3); box-shadow: 0 0 10px var(--gold);
+        }
+
+        .channel-card.active-playing { border: 2px solid var(--gold); background: rgba(255, 215, 0, 0.15); animation: pulseGlow 1.5s infinite alternate; }
+        @keyframes pulseGlow { 0% { box-shadow: 0 0 5px var(--gold); } 100% { box-shadow: 0 0 20px var(--gold), inset 0 0 10px var(--gold); } }
+        .channel-card span { font-size: 11px; font-weight: bold; display: block; margin-top: 5px; }
+        .channel-card .icon { font-size: 24px; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 5px; }
+
+        .footer-info { text-align: center; padding: 30px 10px 20px 10px; font-size: 12px; font-weight: 600; letter-spacing: 1.2px; color: var(--footer-gray); text-transform: uppercase; margin-top: auto; }
+        .brand-text { color: rgba(255, 255, 255, 0.9); font-weight: 800; }
+
+        /* --- MOBILE LAYOUT OVERRIDE --- */
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            #player-wrapper { 
+                flex: none; height: auto; border-right: none; border-bottom: 2px solid var(--gold); 
+                aspect-ratio: 16/9; /* Fix height on mobile */
+            }
+            .video-container { aspect-ratio: 16/9; height: auto; }
+            .channel-grid { grid-template-columns: repeat(3, 1fr); } /* Force 3 columns on mobile */
+            #channels-wrapper { flex: 1; }
+        }
+
+        /* --- FULLSCREEN FIXES --- */
+        body:fullscreen #player-wrapper { width: 100vw; height: 100vh; border: none; }
+        body:fullscreen #channels-wrapper { display: none; }
+        body:fullscreen .video-container { height: 100%; }
+
+        .css-force-landscape { 
+            position: fixed !important; top: 0 !important; left: 0 !important; width: 100vh !important; height: 100vw !important; 
+            transform: rotate(90deg) translateY(-100%); transform-origin: top left; z-index: 99999 !important; background: #000; border: none !important; 
+        }
+        .css-force-landscape .video-container { height: 100%; display: flex; align-items: center; }
+        .css-force-landscape .tools-bar { padding-bottom: 20px; }
+        .hide-list { display: none !important; }
+
+        @media (max-width: 768px) and (orientation: landscape) {
+            #player-wrapper { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; border-bottom: none; z-index: 99999; background: #000; }
+            .video-container { height: 100%; display: flex; align-items: center; }
+            #player-wrapper .tools-bar { padding-bottom: 20px; }
+            #channels-wrapper { display: none; }
+        }
+        
+        /* Hide Rotate Warning on Large Screens */
+        @media (min-width: 769px) { #rotateWarning { display: none !important; } }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <div id="player-wrapper" class="unselectable">
+        <div class="now-playing overlay-ui" id="nowPlayingText">🔴 Loading...</div>
+        
+        <div class="install-buttons overlay-ui">
+            <button id="installWebBtn" class="header-btn" onclick="installWebApp()" tabindex="0">🖥️ Web App</button>
+            <a href="https://www.mediafire.com/file/q6i1a92a3ywxqny/Malik_TV_%2528Jazz_FREE%2529.apk/file" target="_blank" class="header-btn" tabindex="0">📱 Android App</a>
+        </div>
+
+        <button class="pip-btn overlay-ui" id="pipBtn" onclick="togglePiP()" title="Picture in Picture" tabindex="0">
+            <svg viewBox="0 0 24 24">
+                <path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/>
+            </svg>
+        </button>
+
+        <div id="rotateWarning" class="toast-msg">
+            🔄 Full Screen me dekhne ke liye apne mobile se "Auto-Rotate" ON karke Mobile ko ghumaye Landscape Mode me! 🔄
+        </div>
+
+        <div class="video-container" id="vidContainer">
+            <div class="click-shield-main" onclick="toggleControls()" ondblclick="toggleCinemaMode()"></div>
+
+            <div id="playerLoader" class="player-loader"></div>
+            
+            <video id="videoPlayer" playsinline autoplay></video>
+        </div>
+        
+        <div class="tools-bar overlay-ui" id="controlsBar" onclick="event.stopPropagation()">
+            <div class="tools-left">
+                <button class="btn" onclick="toggleVolume()" id="volBtn" tabindex="0">🔊</button>
+                <select id="qualitySelector" class="quality-select" onchange="changeQuality(this.value)" tabindex="0">
+                    <option value="-1">Auto</option>
+                </select>
+            </div>
+            <div class="tools-center">
+                <button class="btn play-btn" onclick="togglePlayPause()" id="playBtn" tabindex="0">⏸</button>
+            </div>
+            <div class="tools-right">
+                <button class="btn" onclick="toggleFit()" id="fitBtn" tabindex="0">↔ Extend</button>
+                <button class="btn" onclick="toggleCinemaMode()" id="cinemaBtn" tabindex="0">⛶ Full Screen ↻</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="channels-wrapper">
+        <div class="list-container">
+            
+            <div class="brand-header unselectable">
+                <h1 class="brand-title">MALIK TV</h1>
+                <p class="brand-subtitle">Presented by Tech IT Master & Burhan Telecom</p>
+            </div>
+
+            <marquee class='marquee-code unselectable' direction='right' behavior='scroll' scrollamount='6'>
+                یہ چینل آپ ملک ٹی وی کے تعاون سے جاز کی زیرو ایم بی، بغیر انٹرنیٹ پیکج والی سم سے صرف خالی ڈیٹا آن کرکے بالکل فری دیکھ سکتے ہیں یا پھر جازورلڈ یعنی (سِموسا ایپ) سے روزانہ کی فری ایم بی لے کر یہ چینل آپ لائیو چلا سکتے ہیں۔ اگر ایپ میں کوئی مسئلہ پیش آرہا ہے تو ایپ میں موجود چیٹ سپورٹ آپشن سے ہمیں میسج کریں۔ ملک ٹی وی استعمال کرنے کا شکریہ
+            </marquee>
+
+            <div class="search-box">
+                <form onsubmit="event.preventDefault(); document.getElementById('searchInput').blur();">
+                    <input type="text" id="searchInput" class="search-input" placeholder="🔍 Search Channel..." oninput="renderChannels(this.value)" autocomplete="off" spellcheck="false" tabindex="0">
+                </form>
+            </div>
+
+            <div id="channels-container" class="unselectable"></div>
+            
+        </div>
+        <div class="footer-info unselectable">
+            © 2026 <span class="brand-text">MALIK TV</span> — ALL RIGHTS RESERVED
+        </div>
+    </div>
+
+    <script>
+        // PWA Install Logic (Web App Shortcut)
+        let deferredPrompt;
+        const installWebBtn = document.getElementById('installWebBtn');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installWebBtn.style.display = 'flex'; // Show shortcut button
+        });
+
+        async function installWebApp() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') installWebBtn.style.display = 'none';
+                deferredPrompt = null;
+            }
+        }
+
+        //  CHANNELS ARRAY
+        const channelsData = [
+            // 🏏 SPORTS
+            { cat: "🏏 Sports", name: "PSL Promo", url: "https://cdn07khi-n.tamashaweb.com:8087/jazzauth/PSL-2026-abr/live/PSL-Promo/chunks.m3u8", icon: "📺" },
+            { cat: "🏏 Sports", name: "Ten Sports", url: "https://cdn07isb.tamashaweb.com:8087/YlUHeDQb7a/157-3H/playlist.m3u8", icon: "🏆" },
+            { cat: "🏏 Sports", name: "PTV Sports", url: "https://cdn07isb.tamashaweb.com:8087/YlUHeDQb7a/189H/playlist.m3u8", icon: "🏅" },
+            { cat: "🏏 Sports", name: "PSL Eng (1)", url: "https://cdn2aws.tamashaweb.com/out/v1/bbe6ba6d0d1c47fbb8042a49b64db630/index.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "PSL Eng (2)", url: "https://tencentcdn2.tamashaweb.com/v1/0192bed4e5f11ea506ec1afe4c6abd/0192bed664ae1ea506491378f278b7/Tmshsrtmain.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "PSL Urdu (1)", url: "https://cdn3aws.tamashaweb.com/out/v1/b9571bed27e641aca4cdd2c35e1baa27/index.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "PSL Urdu (2)", url: "https://tencentcdn8.tamashaweb.com/v1/019bf00087161567ee93346674d025/019bffb7d77215fc600b1b67f81952/TMSH_WEB2_DIRTY.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "PSL ADFREE (1)", url: "https://cdn5aws.tamashaweb.com/out/v1/9fff7780125a4614a7f3567bc506dc7a/index.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "PSL ADFREE (2)", url: "https://tencentcdn5.tamashaweb.com/v1/0196159eeff41eb4611d121c76c781/0196159f51bb1ea5064913eb2a83ea/TMSH_U1_WEB.m3u8", icon: "🏏" },
+            { cat: "🏏 Sports", name: "Eurosport", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/Eurosport-abr/playlist.m3u8", icon: "⚽" },
+
+            // 🕋 ISLAMIC
+            { cat: "🕋 Islamic", name: "Saudi Makkah", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Saudimakkah(nw)-abr/playlist.m3u8", icon: "🕋" },
+            { cat: "🕋 Islamic", name: "Saudi Madinah", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/SaudiSunnah(NW)-abr/playlist.m3u8", icon: "🕌" },
+            { cat: "🕋 Islamic", name: "Madani Ch", url: "https://cdn07isb.tamashaweb.com:8087/jazzauth/Madni-abr/playlist.m3u8", icon: "📿" },
+            { cat: "🕋 Islamic", name: "Paigham TV", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/PaighamTV-abr/playlist.m3u8", icon: "📖" },
+
+            // 📰 NEWS
+            { cat: "📰 News", name: "Geo News", url: "https://cdn07isb.tamashaweb.com:8087/jazzauth/vsat-geonews-abr/playlist_dvr_timeshift-0-3600.m3u8", icon: "🔴" },
+            { cat: "📰 News", name: "ARY News", url: "https://cdn07isb.tamashaweb.com:8087/jazzauth/vsat-arynews-abr/playlist.m3u8", icon: "🔵" },
+            { cat: "📰 News", name: "Hum News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/humnews-abr/playlist.m3u8", icon: "⚪" },
+            { cat: "📰 News", name: "Express News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/expressnews-abr/playlist.m3u8", icon: "🔴" },
+            { cat: "📰 News", name: "Samaa TV", url: "https://cdn05khi.tamashaweb.com:8087/jazzauth/samaaTV-abr/playlist.m3u8", icon: "🟠" },
+            { cat: "📰 News", name: "Bol News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/BolNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "GNN", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/GNN-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Dawn News", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/DawnNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Suno News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Suno_News-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Neo News", url: "https://cdn24lhr.tamashaweb.com:8087/jazzauth/NeoNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Sun News", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/SUN-NEWS-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "PTV News", url: "https://cdn05khi.tamashaweb.com:8087/jazzauth/PTVNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "ABN News", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/ABNnews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "GTV News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/GTVNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Aaj News", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/AajNews-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "365 News", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/365News-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Tamasha News", url: "https://cdn07isb.tamashaweb.com:8087/jazzauth/Tamasha-News-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Digital Pak", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/Digital-pak-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Al Jazeera", url: "https://cdn05khi.tamashaweb.com:8087/jazzauth/AL-Jazeera-abr/playlist.m3u8", icon: "🌍" },
+            { cat: "📰 News", name: "CNN", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/Livecnn-abr/playlist.m3u8", icon: "🌍" },
+            { cat: "📰 News", name: "DW News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/DWNews-abr/playlist.m3u8", icon: "🌍" },
+            { cat: "📰 News", name: "CGTN HD", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/CgtnHD-abr/playlist.m3u8", icon: "🌍" },
+            { cat: "📰 News", name: "24 News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/24News-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Public TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/PublicTV-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "News One", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/NewsOne-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "Abb Tak", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/abbtak-abr/playlist.m3u8", icon: "📰" },
+            { cat: "📰 News", name: "PNN", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/PNN-abr/playlist.m3u8", icon: "📰" },
+
+            // 🎭 ENTERTAINMENT
+            { cat: "🎭 Entertainment", name: "ARY Digital", url: "https://cdn07lhr.tamashaweb.com:8087/jazzauth/vsat-arydigital-abr/playlist.m3u8", icon: "🌟" },
+            { cat: "🎭 Entertainment", name: "Hum TV", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/humTV-abr/playlist.m3u8", icon: "🎬" },
+            { cat: "🎭 Entertainment", name: "Geo Ent", url: "https://cdn24lhr.tamashaweb.com:8087/jazzauth/GeoEntertainment-abr/playlist.m3u8", icon: "📺" },
+            { cat: "🎭 Entertainment", name: "Green Ent", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/Green_Entertainment-abr/playlist.m3u8", icon: "💚" },
+            { cat: "🎭 Entertainment", name: "PTV Home", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/PTVHome-abr/playlist.m3u8", icon: "🏠" },
+            { cat: "🎭 Entertainment", name: "Express Ent", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/ExpressEntertainment-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "SET HD", url: "https://cdn24lhr.tamashaweb.com:8087/jazzauth/SetEntertainment-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "Bol Ent", url: "https://cdn12isb.tamashaweb.com:8087/jazzauth/BolEntertainment-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "ARY Zindagi", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/ARYzindagi-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "Hum Sitaray", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/HumSitaray-abr/playlist.m3u8", icon: "⭐" },
+            { cat: "🎭 Entertainment", name: "Inplus", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/Inplus-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "AAN TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/AAN-TV-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "Sab TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/SabTV-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "TV One", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/TVOne-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "AurLife", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/AurLife-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "LTN Family", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/LTNFamily-abr/playlist.m3u8", icon: "👨‍👩‍👧" },
+            { cat: "🎭 Entertainment", name: "Aplus", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Aplus-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "Aaj Ent", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/AajEntertainment-abr/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "See TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/seeTV-abr/playlist.m3u8", icon: "👀" },
+            { cat: "🎭 Entertainment", name: "Urooj TV", url: "https://cdn07isb.tamashaweb.com:8087/YlUHeDQb7a/117M/playlist.m3u8", icon: "🎭" },
+            { cat: "🎭 Entertainment", name: "ATV", url: "https://cdn07isb.tamashaweb.com:8087/YlUHeDQb7a/123M/chunks.m3u8", icon: "📺" },
+
+            // 👶 KIDS
+            { cat: "👶 Kids", name: "Cartoon Net", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/cartoonnetwork-abr/playlist.m3u8", icon: "🧸" },
+            { cat: "👶 Kids", name: "Minimax", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Minimax-abr/playlist.m3u8", icon: "🚀" },
+            { cat: "👶 Kids", name: "Baby TV", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/BabyTV-abr/playlist.m3u8", icon: "🍼" },
+
+            // 🎬 MOVIES & MUSIC
+            { cat: "🎬 Movies & Music", name: "Filmax", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Filmax-abr/playlist.m3u8", icon: "🎞️" },
+            { cat: "🎬 Movies & Music", name: "Movie One", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/MovieOne-abr/playlist.m3u8", icon: "🍿" },
+            { cat: "🎬 Movies & Music", name: "8xM", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/8xm-abr/playlist.m3u8", icon: "🎵" },
+            { cat: "🎬 Movies & Music", name: "Jalwa TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/jalwa-abr/playlist.m3u8", icon: "💃" },
+            { cat: "🎬 Movies & Music", name: "Play TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/play-abr/playlist.m3u8", icon: "🎶" },
+
+            // 🌍 DOC & LIFE
+            { cat: "🌍 Doc & Life", name: "Discovery HD", url: "https://cdn05khi.tamashaweb.com:8087/jazzauth/DiscoveryHD-abr/playlist.m3u8", icon: "🦁" },
+            { cat: "🌍 Doc & Life", name: "CGTN Doc", url: "https://cdn23lhr.tamashaweb.com:8087/jazzauth/CgtnDocumentary-abr/playlist.m3u8", icon: "📽️" },
+            { cat: "🌍 Doc & Life", name: "Animal Planet", url: "https://cdn07isb.tamashaweb.com:8087/YlUHeDQb7a/AnimalPlanet-abr/playlist.m3u8", icon: "🐘" },
+            { cat: "🌍 Doc & Life", name: "Discover Pak", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/DiscoveryPakistan-abr/playlist.m3u8", icon: "🇵🇰" },
+            { cat: "🌍 Doc & Life", name: "Hum Masala", url: "https://cdn05khi.tamashaweb.com:8087/jazzauth/hummasala-abr/playlist.m3u8", icon: "🍳" },
+            { cat: "🌍 Doc & Life", name: "Tamasha Woman", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/Tamasha-Women-abr/playlist.m3u8", icon: "👩" },
+            { cat: "🌍 Doc & Life", name: "Tamasha Life", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/Tamasha-Life-HD-abr/playlist.m3u8", icon: "🌱" },
+
+            // 🇵🇰 REGIONAL
+            { cat: "🇵🇰 Regional", name: "KTN News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/ktnNews-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "KTN Ent", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/ktnEntertainment-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Sindh TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/sindhTV-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Sindh News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/SindhNews-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Mehran TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/MehranTV-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Time News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/TimeNews-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Kashish TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/KashishTV-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Khyber TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/AVTkhyberTV-abr/playlist.m3u8", icon: "🏔️" },
+            { cat: "🇵🇰 Regional", name: "Khyber News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/KhyberNews-abr/playlist.m3u8", icon: "🏔️" },
+            { cat: "🇵🇰 Regional", name: "Pashto 1", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Pashto1-abr/playlist.m3u8", icon: "🏔️" },
+            { cat: "🇵🇰 Regional", name: "PTV National", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/PTVNational-abr/playlist.m3u8", icon: "🇵🇰" },
+            { cat: "🇵🇰 Regional", name: "PTV Bolan", url: "https://cdn21lhr.tamashaweb.com:8087/jazzauth/PTVBolan-abr/playlist.m3u8", icon: "🏜️" },
+            { cat: "🇵🇰 Regional", name: "Waseb", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/waseeb-abr/playlist.m3u8", icon: "🌾" },
+            { cat: "🇵🇰 Regional", name: "Rohi TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/RohiTV-abr/playlist.m3u8", icon: "🌾" },
+            { cat: "🇵🇰 Regional", name: "Kay2 HD", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Kay2-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Mashriq TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/mashriqtv-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Koh e Noor", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/KohinoorTV-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Apna TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Apna-abr/playlist.m3u8", icon: "🌐" },
+            { cat: "🇵🇰 Regional", name: "Champion TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/championtv-abr/playlist.m3u8", icon: "🌐" },
+
+            // 🏙️ CITY NEWS
+            { cat: "🏙️ City News", name: "City 42", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/city42(vnw)-abr/playlist.m3u8", icon: "🏙️" },
+            { cat: "🏙️ City News", name: "City 41", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/city41News-abr/playlist.m3u8", icon: "🏙️" },
+            { cat: "🏙️ City News", name: "City 21", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/city21-abr/playlist.m3u8", icon: "🏙️" },
+            { cat: "🏙️ City News", name: "Lahore Rang", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/LahoreRung-abr/playlist.m3u8", icon: "🏙️" },
+            { cat: "🏙️ City News", name: "Metro News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Metro1News-abr/playlist.m3u8", icon: "🏙️" },
+            { cat: "🏙️ City News", name: "K21 News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/K21-abr/playlist.m3u8", icon: "🏙️" },
+
+            // 📺 MISC
+            { cat: "📺 Misc", name: "PTV World", url: "https://cdn22lhr.tamashaweb.com:8087/jazzauth/PTVWorld-abr/playlist.m3u8", icon: "🌍" },
+            { cat: "📺 Misc", name: "A1 TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/A1TV-abr/playlist.m3u8", icon: "📺" },
+            { cat: "📺 Misc", name: "Channel 5", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/Channel5-abr/playlist.m3u8", icon: "📺" },
+            { cat: "📺 Misc", name: "Sach TV", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/SachTV/playlist.m3u8", icon: "📺" },
+            { cat: "📺 Misc", name: "Roz News", url: "https://cdn12isb.tamashaweb.com:8087/YlUHeDQb7a/RozNews-abr/playlist.m3u8", icon: "📺" }
+        ];
+
+        const container = document.getElementById("channels-container");
+
+        // --- SEARCH & RENDER CHANNELS ---
+        function renderChannels(filterText = "") {
+            let html = "";
+            let currentCategory = "";
+            let count = 0;
+            
+            channelsData.forEach((ch, index) => {
+                if(ch.name.toLowerCase().includes(filterText.toLowerCase())) {
+                    if (!filterText && ch.cat !== currentCategory) {
+                        if (html !== "") html += `</div>`;
+                        html += `<div class="category-title">${ch.cat}</div><div class="channel-grid">`;
+                        currentCategory = ch.cat;
+                    } else if (filterText && currentCategory === "") {
+                        html += `<div class="channel-grid">`;
+                        currentCategory = "search";
+                    }
+                    // ADDED tabindex="0" and onkeypress FOR SMART TV/PC KEYBOARD SUPPORT
+                    html += `<div class="channel-card" id="card-${index}" tabindex="0" onclick="playChannel('${ch.url}', '${ch.name}', 'card-${index}')" onkeypress="if(event.key==='Enter') playChannel('${ch.url}', '${ch.name}', 'card-${index}')">
+                                <div class="icon">${ch.icon}</div><span>${ch.name}</span>
+                             </div>`;
+                    count++;
+                }
+            });
+            if (html !== "") html += `</div>`;
+            if (count === 0) html = `<div style="text-align:center; padding: 20px; color:var(--gold);">Koi channel nahi mila!</div>`;
+            container.innerHTML = html;
+        }
+
+        renderChannels(); // Initial Load
+
+        // PLAYER LOGIC
+        const video = document.getElementById('videoPlayer');
+        const loader = document.getElementById('playerLoader');
+        const playBtn = document.getElementById('playBtn');
+        let hls;
+
+        // --- SMART PiP LOGIC ---
+        const pipBtn = document.getElementById('pipBtn');
+        if ('pictureInPictureEnabled' in document && document.pictureInPictureEnabled) {
+            pipBtn.style.display = 'flex'; // Show if natively supported
+        }
+
+        async function togglePiP() {
+            try {
+                if (video !== document.pictureInPictureElement) {
+                    await video.requestPictureInPicture();
+                } else {
+                    await document.exitPictureInPicture();
+                }
+            } catch (error) {
+                console.log("PiP Failed:", error);
+            }
+        }
+
+        video.addEventListener('waiting', () => loader.style.display = 'block');
+        video.addEventListener('playing', () => { loader.style.display = 'none'; playBtn.innerText = "⏸"; });
+        video.addEventListener('pause', () => playBtn.innerText = "▶");
+        video.addEventListener('canplay', () => loader.style.display = 'none');
+
+        // Play Channel
+        function playChannel(url, name, cardId, isInitial = false) {
+            document.getElementById('nowPlayingText').innerText = "🔴 Playing: " + name;
+            loader.style.display = 'block'; 
+            
+            document.querySelectorAll('.channel-card').forEach(c => c.classList.remove('active-playing'));
+            if(cardId) {
+                const activeCard = document.getElementById(cardId);
+                if(activeCard) activeCard.classList.add('active-playing');
+            }
+
+            try {
+                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    if (hls) { hls.destroy(); }
+                    hls = new Hls();
+                    hls.loadSource(url);
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
+                        
+                        video.muted = false; // 100% Volume
+                        video.play().catch(e => {
+                            console.log("Auto-play blocked by browser.");
+                            playBtn.innerText = "▶";
+                        });
+
+                        const qSelect = document.getElementById('qualitySelector');
+                        qSelect.innerHTML = '<option value="-1">Auto</option>';
+                        data.levels.forEach((level, index) => {
+                            qSelect.innerHTML += `<option value="${index}">${level.height}p</option>`;
+                        });
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = url;
+                    video.muted = false;
+                    video.play();
+                } else {
+                    loader.style.display = 'none';
+                }
+            } catch(e) {
+                loader.style.display = 'none';
+                console.log("Offline mode or HLS script missing.");
+            }
+            
+            // Only scroll into view if on mobile layout, prevent jumping on PC
+            if(!isInitial && cardId && window.innerWidth <= 768) {
+                const el = document.getElementById(cardId);
+                if(el) { setTimeout(() => { el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }
+            }
+        }
+
+        function changeQuality(level) { if (hls) hls.currentLevel = parseInt(level); }
+
+        // --- CUSTOM PLAY / PAUSE ---
+        function togglePlayPause() {
+            if (video.paused) video.play();
+            else video.pause();
+        }
+
+        // --- CUSTOM MUTE / UNMUTE ---
+        function toggleVolume() {
+            const volBtn = document.getElementById('volBtn');
+            if (video.muted) {
+                video.muted = false;
+                volBtn.innerText = "🔊";
+            } else {
+                video.muted = true;
+                volBtn.innerText = "🔇";
+            }
+        }
+
+        // --- TOGGLE CONTROLS LOGIC (TAP SHOW/HIDE ONLY) ---
+        const playerWrapper = document.getElementById('player-wrapper');
+        let hideTimeout;
+        
+        function toggleControls() {
+            if (playerWrapper.classList.contains('active-controls')) {
+                playerWrapper.classList.remove('active-controls');
+                clearTimeout(hideTimeout);
+            } else {
+                playerWrapper.classList.add('active-controls');
+                clearTimeout(hideTimeout);
+                // Hide after 3 seconds
+                hideTimeout = setTimeout(() => { playerWrapper.classList.remove('active-controls'); }, 3000); 
+            }
+        }
+
+        function showControlsTemp() {
+            playerWrapper.classList.add('active-controls');
+            clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(() => { playerWrapper.classList.remove('active-controls'); }, 3000); 
+        }
+
+        // --- EXTEND / FILL SCREEN ---
+        let isFit = false;
+        function toggleFit() {
+            const fitBtn = document.getElementById('fitBtn');
+            if(!isFit) {
+                video.classList.add("video-fill");
+                fitBtn.innerText = "⏏ Reset"; fitBtn.style.color = "var(--gold)";
+                isFit = true;
+            } else {
+                video.classList.remove("video-fill");
+                fitBtn.innerText = "↔ Extend"; fitBtn.style.color = "var(--white)";
+                isFit = false;
+            }
+        }
+
+        // --- SHOW ROTATE WARNING (BLINKING 6.5 SECONDS) ---
+        function showWarningToast() {
+            // Only show on mobile
+            if(window.innerWidth <= 768) {
+                const toast = document.getElementById('rotateWarning');
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 6500); // Blinks for 6.5 seconds
+            }
+        }
+
+        // --- FULL SCREEN LOGIC (TRUE FULLSCREEN FOR PC/TV) ---
+        let isCinemaMode = false;
+        function toggleCinemaMode() {
+            const wrapper = document.body; // Fullscreen the entire body
+            const btn = document.getElementById('cinemaBtn');
+
+            if (!isCinemaMode) {
+                showWarningToast(); // Warning Message Center Popup (Mobile only)
+
+                if (wrapper.requestFullscreen) {
+                    wrapper.requestFullscreen().then(() => {
+                        if (screen.orientation && screen.orientation.lock && window.innerWidth <= 768) {
+                            screen.orientation.lock('landscape').catch(e => { forceCSSRotate(document.getElementById('player-wrapper')); });
+                        } 
+                        // Do not force CSS rotate on PC
+                    }).catch(err => { if(window.innerWidth <= 768) forceCSSRotate(document.getElementById('player-wrapper')); });
+                } else if (wrapper.webkitRequestFullscreen) { /* Safari */
+                    wrapper.webkitRequestFullscreen();
+                } else if (wrapper.msRequestFullscreen) { /* IE11 */
+                    wrapper.msRequestFullscreen();
+                } else if(window.innerWidth <= 768) { forceCSSRotate(document.getElementById('player-wrapper')); }
+                
+                btn.innerText = "⏏ EXIT FULL ↻"; btn.style.color = "var(--gold)";
+                isCinemaMode = true;
+            } else {
+                if (document.exitFullscreen) { document.exitFullscreen().catch(e => console.log(e)); }
+                else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+                else if (document.msExitFullscreen) { document.msExitFullscreen(); }
+                if (screen.orientation && screen.orientation.unlock) { screen.orientation.unlock(); }
+                removeCSSRotate(document.getElementById('player-wrapper'));
+                btn.innerText = "⛶ Full Screen ↻"; btn.style.color = "var(--white)";
+                isCinemaMode = false;
+            }
+        }
+
+        function forceCSSRotate(wrapper) {
+            if(window.innerWidth <= 768) {
+                wrapper.classList.add("css-force-landscape");
+                document.getElementById('channels-wrapper').classList.add("hide-list");
+            }
+        }
+        function removeCSSRotate(wrapper) {
+            wrapper.classList.remove("css-force-landscape");
+            document.getElementById('channels-wrapper').classList.remove("hide-list");
+        }
+
+        // Listen for user pressing ESC key to exit fullscreen
+        document.addEventListener('fullscreenchange', exitHandler);
+        document.addEventListener('webkitfullscreenchange', exitHandler);
+        document.addEventListener('mozfullscreenchange', exitHandler);
+        document.addEventListener('MSFullscreenChange', exitHandler);
+
+        function exitHandler() {
+            if (!document.fullscreenElement && !document.webkitIsFullScreen && !document.mozFullScreen && !document.msFullscreenElement) {
+                if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+                removeCSSRotate(document.getElementById('player-wrapper'));
+                isCinemaMode = false;
+                const btn = document.getElementById('cinemaBtn');
+                if(btn){
+                     btn.innerText = "⛶ Full Screen ↻";
+                     btn.style.color = "var(--white)";
+                }
+            }
+        }
+
+        // Prevent accidental zoom (Mobile)
+        document.addEventListener('touchstart', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+
+        // --- RANDOM CHANNEL AUTO-PLAY ON START WITH FULL SOUND ---
+        document.addEventListener("DOMContentLoaded", () => {
+            if(channelsData && channelsData.length > 0) {
+                
+                video.muted = false; 
+                document.getElementById('volBtn').innerText = "🔊";
+                
+                const randomIndex = Math.floor(Math.random() * channelsData.length);
+                const randomChannel = channelsData[randomIndex];
+                const cardId = 'card-' + randomIndex;
+
+                // Pass 'true' to prevent auto-scrolling
+                playChannel(randomChannel.url, randomChannel.name, cardId, true);
+                
+                showControlsTemp();
+            }
+        });
+
+    </script>
+</body>
+</html>
